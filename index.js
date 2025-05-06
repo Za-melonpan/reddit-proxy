@@ -1,67 +1,80 @@
 const https = require('https');
 const querystring = require('querystring');
 
-module.exports = (req, res) => {
-  const getAccessToken = () => {
-    return new Promise((resolve, reject) => {
-      const postData = querystring.stringify({
-        grant_type: 'refresh_token',
-        refresh_token: process.env.REDDIT_ACCESS_TOKEN,
-        client_id: process.env.REDDIT_CLIENT_ID,
-      });
+module.exports = async (req, res) => {
+  try {
+    // Step 1: Refresh token to get access token
+    const token = await getAccessToken();
 
-      const options = {
-        hostname: 'www.reddit.com',
-        path: '/api/v1/access_token',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Content-Length': Buffer.byteLength(postData),
-          'User-Agent': 'MakeBot/0.1 by za_melonpan',
-        },
-      };
+    if (!token) {
+      res.statusCode = 500;
+      return res.end(JSON.stringify({ error: 'Token fetch failed', details: 'No access token returned' }));
+    }
 
-      const tokenReq = https.request(options, tokenRes => {
-        let body = '';
-        tokenRes.on('data', chunk => body += chunk);
-        tokenRes.on('end', () => {
-          const data = JSON.parse(body);
-          if (data.access_token) resolve(data.access_token);
-          else reject(new Error('No access token returned'));
-        });
-      });
-
-      tokenReq.on('error', reject);
-      tokenReq.write(postData);
-      tokenReq.end();
-    });
-  };
-
-  getAccessToken().then(token => {
-    const url = new URL(req.url, 'https://oauth.reddit.com');
-    const proxyOptions = {
+    // Step 2: Make the actual Reddit API request
+    const apiUrl = new URL(req.url, 'https://oauth.reddit.com');
+    const options = {
       hostname: 'oauth.reddit.com',
-      path: url.pathname + url.search,
+      path: apiUrl.pathname + apiUrl.search,
       method: req.method,
       headers: {
         'Authorization': `Bearer ${token}`,
-        'User-Agent': 'MakeBot/0.1 by za_melonpan',
-      },
+        'User-Agent': process.env.REDDIT_USER_AGENT || 'MakeBot/0.1 by za_melonpan'
+      }
     };
 
-    const proxy = https.request(proxyOptions, redditRes => {
+    const proxy = https.request(options, redditRes => {
       res.writeHead(redditRes.statusCode, redditRes.headers);
       redditRes.pipe(res, { end: true });
     });
-
-    req.pipe(proxy, { end: true });
 
     proxy.on('error', err => {
       res.statusCode = 500;
       res.end(JSON.stringify({ error: 'Proxy failed', details: err.message }));
     });
-  }).catch(err => {
+
+    req.pipe(proxy, { end: true });
+
+  } catch (err) {
     res.statusCode = 500;
-    res.end(JSON.stringify({ error: 'Token fetch failed', details: err.message }));
-  });
+    res.end(JSON.stringify({ error: 'Unexpected failure', details: err.message }));
+  }
 };
+
+// Helper: Get Access Token from Reddit using refresh token
+function getAccessToken() {
+  return new Promise((resolve, reject) => {
+    const postData = querystring.stringify({
+      grant_type: 'refresh_token',
+      refresh_token: process.env.REDDIT_REFRESH_TOKEN
+    });
+
+    const options = {
+      hostname: 'www.reddit.com',
+      path: '/api/v1/access_token',
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${Buffer.from(`${process.env.REDDIT_CLIENT_ID}:`).toString('base64')}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    };
+
+    const req = https.request(options, res => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          resolve(parsed.access_token);
+        } catch (err) {
+          reject(new Error('Failed to parse token response: ' + data));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.write(postData);
+    req.end();
+  });
+}
