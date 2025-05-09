@@ -56,7 +56,8 @@ function getAccessToken() {
       headers: {
         'Authorization': `Basic ${Buffer.from(`${process.env.REDDIT_CLIENT_ID}:`).toString('base64')}`,
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Content-Length': Buffer.byteLength(postData)
+        'Content-Length': Buffer.byteLength(postData),
+        'User-Agent': process.env.REDDIT_USER_AGENT || 'MakeBot/0.1 by za_melonpan'
       }
     };
 
@@ -64,6 +65,7 @@ function getAccessToken() {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
+        console.log('Token response:', data);  // Debug log for token response
         try {
           const parsed = JSON.parse(data);
           resolve(parsed.access_token);
